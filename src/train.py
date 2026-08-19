@@ -110,12 +110,21 @@ class DistillationTrainer(SFTTrainer):
             ignore_index = -100,
         )
 
-        # Softmax KL divergence: L_kd = T^2 * KL(softmax(z_t / T) || softmax(z_s / T)) (Hinton et al. 2015)
+        # Memory-efficient chunked Softmax KL divergence: L_kd = T^2 * KL(softmax(z_t / T) || softmax(z_s / T))
         mask = (shift_labels != -100)
         if mask.sum() > 0:
-            student_log_probs = F.log_softmax(shift_student[mask] / self.temperature, dim=-1)
-            teacher_probs = F.softmax(shift_teacher[mask] / self.temperature, dim=-1)
-            kl_loss = F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (self.temperature ** 2)
+            active_s = shift_student[mask]
+            active_t = shift_teacher[mask]
+            num_active = active_s.shape[0]
+            total_kl = 0.0
+            CHUNK_SIZE = 512
+            for i in range(0, num_active, CHUNK_SIZE):
+                s_chunk = active_s[i : i + CHUNK_SIZE]
+                t_chunk = active_t[i : i + CHUNK_SIZE]
+                s_log_p = F.log_softmax(s_chunk / self.temperature, dim=-1)
+                t_p = F.softmax(t_chunk / self.temperature, dim=-1)
+                total_kl = total_kl + F.kl_div(s_log_p, t_p, reduction="sum")
+            kl_loss = (total_kl / num_active) * (self.temperature ** 2)
             # Dual-objective loss: (1 - alpha) * L_ce + alpha * L_kd (Sanh et al. 2019, arXiv:1910.01108)
             total_loss = (1.0 - self.alpha) * ce_loss + self.alpha * kl_loss
         else:
@@ -268,20 +277,20 @@ def main():
 
     # Export GGUF binary for llama-server
     if args.export_gguf:
-        gguf_dir = "./gguf_output"
-        print(f"Exporting to GGUF ({args.quant_method})...")
-        student_model.save_pretrained_gguf(gguf_dir, tokenizer, quantization_method = args.quant_method)
-        print(f"Saved GGUF model to {gguf_dir}")
-
         if args.upload_model_repo_id.strip() and hf_token:
-            api = HfApi()
-            api.upload_folder(
-                folder_path=gguf_dir,
-                path_in_repo="gguf",
-                repo_id=args.upload_model_repo_id.strip(),
-                token=hf_token.strip()
+            print(f"Exporting and pushing GGUF ({args.quant_method}) to {args.upload_model_repo_id}...")
+            student_model.push_to_hub_gguf(
+                repo_id = args.upload_model_repo_id.strip(),
+                tokenizer = tokenizer,
+                quantization_method = args.quant_method,
+                token = hf_token.strip(),
             )
-            print("Upload complete.")
+            print("GGUF upload complete.")
+        else:
+            gguf_dir = "./gguf_output"
+            print(f"Exporting local GGUF ({args.quant_method})...")
+            student_model.save_pretrained_gguf(gguf_dir, tokenizer, quantization_method = args.quant_method)
+            print(f"Saved GGUF model to {gguf_dir}")
 
 if __name__ == "__main__":
     main()
