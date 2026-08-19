@@ -282,7 +282,7 @@ def main():
                 token=hf_token.strip()
             )
             import glob
-            gguf_files = glob.glob(f"{gguf_dir}*.gguf") + glob.glob("*.gguf")
+            gguf_files = glob.glob(f"{gguf_dir}/**/*.gguf", recursive=True) + glob.glob(f"{gguf_dir}*.gguf") + glob.glob("**/*.gguf", recursive=True)
             for gf in set(gguf_files):
                 filename = os.path.basename(gf)
                 print(f"Uploading GGUF binary {gf} to gguf/{filename}...")
