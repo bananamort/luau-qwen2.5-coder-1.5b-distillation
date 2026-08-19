@@ -86,22 +86,31 @@ class DistillationTrainer(SFTTrainer):
         self.alpha = alpha
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        # Student forward pass (Fast Unsloth Triton kernels)
-        student_outputs = model(**inputs)
-        student_logits = student_outputs.logits
-        ce_loss = student_outputs.loss
         labels = inputs.get("labels")
+        model_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+
+        # Student forward pass (Fast Unsloth Triton kernels)
+        student_outputs = model(**model_inputs)
+        student_logits = student_outputs.logits
 
         # Teacher forward pass (Frozen logit extraction)
         with torch.inference_mode():
-            teacher_outputs = self.teacher_model(**inputs)
+            teacher_outputs = self.teacher_model(**model_inputs)
             teacher_logits = teacher_outputs.logits
 
-        # Softmax KL divergence: L_kd = T^2 * KL(softmax(z_t / T) || softmax(z_s / T)) (Hinton et al. 2015)
+        # Shift tokens for causal language modeling
         shift_student = student_logits[..., :-1, :].contiguous()
         shift_teacher = teacher_logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
 
+        # Hard Cross-Entropy Loss
+        ce_loss = F.cross_entropy(
+            shift_student.view(-1, shift_student.shape[-1]),
+            shift_labels.view(-1),
+            ignore_index = -100,
+        )
+
+        # Softmax KL divergence: L_kd = T^2 * KL(softmax(z_t / T) || softmax(z_s / T)) (Hinton et al. 2015)
         mask = (shift_labels != -100)
         if mask.sum() > 0:
             student_log_probs = F.log_softmax(shift_student[mask] / self.temperature, dim=-1)
