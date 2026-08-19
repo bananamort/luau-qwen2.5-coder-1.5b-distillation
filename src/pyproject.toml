@@ -1,0 +1,31 @@
+[project]
+name = "luau-qwen2-5-coder-1-5b-distillation"
+version = "0.1.0"
+description = "Luau Qwen2.5-Coder-1.5B FIM"
+readme = "../README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.4.0",
+    "transformers>=4.45.0",
+    "tokenizers>=0.20.0",
+    "trl>=0.11.0",
+    "peft>=0.13.0",
+    "bitsandbytes>=0.44.0",
+    "pyarrow>=17.0.0",
+    "pandas>=2.2.0",
+    "datasets>=3.0.0",
+    "accelerate>=0.34.0",
+    "safetensors>=0.4.5",
+    "huggingface-hub>=0.25.0",
+    "tqdm>=4.66.5",
+    "sentencepiece>=0.2.0",
+    "numpy>=1.26.0,<3.0.0",
+    "wandb>=0.17.0",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false

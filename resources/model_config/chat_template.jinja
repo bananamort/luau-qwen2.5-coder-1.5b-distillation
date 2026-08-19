@@ -1,0 +1,21 @@
+{#- Extract the system message #}
+{%- if messages is defined and messages|length > 0 and messages[0]['role'] == 'system' and messages[0]['content'] is string %}
+    {%- set system_message = messages[0]['content'] %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = 'You are a code completion assistant.' %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{{- '<|im_start|>system\n' + system_message + '<|im_end|>\n' }}
+
+{#- Insert all subsequent messages #}
+{%- for message in loop_messages %}
+    {%- if message.content is string %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
+    {%- endif %}
+{%- endfor %}
+
+{#- Add generation prompt if needed #}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}

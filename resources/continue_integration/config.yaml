@@ -1,0 +1,21 @@
+# Continue.dev configuration for Luau-Qwen3-4B-FIM-v0.1
+# Backed by LM Studio (as provided on the official model card)
+name: Local Autocomplete
+version: 1.0.0
+schema: v1
+models:
+  - name: Luau Qwen3 4B FIM v0.1
+    provider: lmstudio
+    apiBase: http://localhost:1234/v1
+    model: luau-qwen3-4b-fim-v0.1
+    roles:
+      - autocomplete
+    defaultCompletionOptions:
+      stop:
+        - "<|im_end|>"
+        - "</s>"
+        - "<|repo_name|>"
+        - "<|file_sep|>"
+        - "```"
+    promptTemplates:
+      autocomplete: "<|im_start|>system\nYou are a code completion assistant.<|im_end|>\n<|im_start|>user\n<|repo_name|>{{{reponame}}}<|file_sep|>{{{filename}}}<|fim_suffix|>{{{suffix}}}<|fim_prefix|>{{{prefix}}}<|fim_middle|><|im_end|>\n<|im_start|>assistant\n"
