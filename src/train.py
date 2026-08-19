@@ -169,7 +169,6 @@ def main():
         max_seq_length = args.max_seq_length,
         dtype = None, # Unsloth autodetects native BF16 / FP16
         load_in_4bit = False, # Full 16-bit precision base weights
-        tokenizer = tokenizer,
     )
 
     # Rank-Stabilized LoRA: delta_W = (alpha / sqrt(r)) * B * A (Kalajdzievski 2023, arXiv:2312.03732)
