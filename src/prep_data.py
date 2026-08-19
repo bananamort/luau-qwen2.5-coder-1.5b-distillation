@@ -6,7 +6,7 @@ Dataset processor for the-luau-stack:
 1. Minifies Luau files using Darklua (dense generator, comments stripped, 0% AST changes).
 2. Generates 50% SPM / 50% PSM FIM samples with -100 prompt label masking (OpenAI Bavarian et al., 2022).
 3. Supports multiple independent random FIM cuts per file (--cuts_per_file, default: 6 -> ~500k samples).
-4. Streams pre-tokenized tensors in batches directly to Parquet to maintain low RAM (<200MB).
+4. Exports pre-tokenized tensors directly to Parquet for fast GPU dataloading.
 """
 
 import os
@@ -192,7 +192,6 @@ def main():
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    # Streaming Parquet schema (Zstandard compressed, low constant memory)
     schema = pa.schema([
         ("input_ids", pa.list_(pa.int32())),
         ("labels", pa.list_(pa.int32())),
