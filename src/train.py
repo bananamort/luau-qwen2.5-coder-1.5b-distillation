@@ -16,6 +16,7 @@ import argparse
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["PYTHONUNBUFFERED"] = "1"
+os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
@@ -198,11 +199,15 @@ def main():
         p.requires_grad = False
     print(f"Teacher frozen parameters: {sum(p.numel() for p in teacher_model.parameters()):,}")
 
+    effective_batch = args.batch_size * args.grad_accum
+    total_steps = args.max_steps if args.max_steps > 0 else max(1, (len(dataset) // effective_batch) * args.epochs)
+    warmup_steps = max(1, int(total_steps * args.warmup_ratio))
+
     # 4. Distillation Trainer Setup
     training_args = TrainingArguments(
         per_device_train_batch_size = args.batch_size,
         gradient_accumulation_steps = args.grad_accum,
-        warmup_ratio = args.warmup_ratio,
+        warmup_steps = warmup_steps,
         num_train_epochs = args.epochs if args.max_steps <= 0 else 1,
         max_steps = args.max_steps if args.max_steps > 0 else -1,
         learning_rate = args.learning_rate,
