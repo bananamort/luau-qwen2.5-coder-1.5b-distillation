@@ -6,7 +6,7 @@ Dataset processor for the-luau-stack:
 1. Minifies Luau files using Darklua (dense generator, comments stripped, 0% AST changes).
 2. Generates 50% SPM / 50% PSM FIM samples with -100 prompt label masking (OpenAI Bavarian et al., 2022).
 3. Supports multiple independent random FIM cuts per file (--cuts_per_file, default: 6 -> ~500k samples).
-4. Exports pre-tokenized tensors directly to Parquet for fast GPU dataloading.
+4. Streams pre-tokenized tensors in batches directly to Parquet to maintain low RAM (<200MB).
 """
 
 import os
@@ -192,20 +192,38 @@ def main():
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
+    # Streaming Parquet schema (Zstandard compressed, low constant memory)
+    schema = pa.schema([
+        ("input_ids", pa.list_(pa.int32())),
+        ("labels", pa.list_(pa.int32())),
+        ("attention_mask", pa.list_(pa.int8()))
+    ])
+
+    writer = pq.ParquetWriter(args.output_parquet, schema, compression="zstd")
+    batch = []
+    BATCH_FLUSH_SIZE = 5000
+    total_samples = 0
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         tasks = [(code, tok, args.max_seq_len, args.cuts_per_file, tmp_dir, f"{idx}_{uuid.uuid4().hex[:6]}") for idx, code in enumerate(codes)]
-        processed_samples = []
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             for idx, result in enumerate(executor.map(process_single_code, tasks, chunksize=100)):
                 if result:
-                    processed_samples.extend(result)
+                    batch.extend(result)
+                    total_samples += len(result)
+                    if len(batch) >= BATCH_FLUSH_SIZE:
+                        writer.write_table(pa.Table.from_pylist(batch, schema=schema))
+                        batch.clear()
                 if (idx + 1) % 1000 == 0 or (idx + 1) == len(tasks):
-                    print(f"Progress: {idx + 1}/{len(tasks)} ({len(processed_samples)} total FIM samples)")
+                    print(f"Progress: {idx + 1}/{len(tasks)} files processed ({total_samples} total FIM samples)", flush=True)
 
-    out_table = pa.Table.from_pylist(processed_samples)
-    pq.write_table(out_table, args.output_parquet, compression="zstd")
+    if batch:
+        writer.write_table(pa.Table.from_pylist(batch, schema=schema))
+        batch.clear()
+
+    writer.close()
     file_size_mb = os.path.getsize(args.output_parquet) / (1024 * 1024)
-    print(f"Saved: {args.output_parquet} ({file_size_mb:.2f} MB, {len(processed_samples)} total FIM samples)")
+    print(f"Saved: {args.output_parquet} ({file_size_mb:.2f} MB, {total_samples} total FIM samples)")
 
 if __name__ == "__main__":
     main()
