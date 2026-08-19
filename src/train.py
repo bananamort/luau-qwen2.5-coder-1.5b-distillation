@@ -190,7 +190,6 @@ def main():
     print(f"Loading 4B Torpedo Teacher ({args.teacher_model}) in full 16-bit...")
     teacher_model = AutoModelForCausalLM.from_pretrained(
         args.teacher_model,
-        load_in_4bit = False,
         device_map = "auto",
         torch_dtype = "auto",
     )
