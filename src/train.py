@@ -140,7 +140,17 @@ class DistillationTrainer(SFTTrainer):
             kl_loss = (kl_sum / num_tokens) * (self.temperature ** 2)
             total_loss = (1.0 - self.alpha) * ce_loss + self.alpha * kl_loss
         else:
+            kl_loss = torch.tensor(0.0, device=shift_student.device)
             total_loss = ce_loss
+
+        # Log sub-losses
+        if self.is_in_train and hasattr(self, "state") and self.state.global_step % self.args.logging_steps == 0:
+            if getattr(self, "_last_logged_step", -1) != self.state.global_step:
+                self._last_logged_step = self.state.global_step
+                self.log({
+                    "loss_ce": round(ce_loss.item(), 4),
+                    "loss_kl": round(kl_loss.item(), 4),
+                })
 
         return (total_loss, student_outputs) if return_outputs else total_loss
 
