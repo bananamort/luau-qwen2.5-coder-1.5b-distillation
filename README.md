@@ -1,6 +1,6 @@
 # Luau Qwen2.5-Coder-1.5B Distillation
 
-Technical documentation, research foundations, architecture specifications, and executable Google Colab pipelines for distilling **`TorpedoSoftware/Luau-Qwen3-4B-FIM-v0.1`** (4B Teacher, Williams 2025) into **`Qwen/Qwen2.5-Coder-1.5B-Instruct`** (1.5B Student, Hui et al. 2024, [arXiv:2409.12186](https://arxiv.org/abs/2409.12186)) using **Unsloth** and **Rank-Stabilized LoRA (rsLoRA)** (Kalajdzievski 2023, [arXiv:2312.03732](https://arxiv.org/abs/2312.03732)) for ultra-fast local code completion via `llama.cpp`.
+Technical documentation, research foundations, architecture specifications, and executable Google Colab pipelines for distilling **`TorpedoSoftware/Luau-Qwen3-4B-FIM-v0.1`** (4B Teacher, Williams 2025) into **`Qwen/Qwen2.5-Coder-1.5B-Instruct`** (1.5B Student, Hui et al. 2024, [arXiv:2409.12186](https://arxiv.org/abs/2409.12186)) using **Unsloth**, **Rank-Stabilized LoRA (rsLoRA)** (Kalajdzievski 2023, [arXiv:2312.03732](https://arxiv.org/abs/2312.03732)), and **Quantization-Aware Distillation (QAD)** for ultra-fast local code completion via `llama.cpp`.
 
 ---
 
@@ -9,7 +9,7 @@ Technical documentation, research foundations, architecture specifications, and 
 1. **Extremely Fast Pre-fill / Time-to-First-Token (TTFT):** $\le 2.3\text{ s}$ on full 2,048-token prompts on CPU.
 2. **High Generation Speed:** $\sim 75\text{ tokens/sec}$ ($\sim 13.3\text{ ms/token}$).
 3. **Low Latency per Token:** Sub-$15\text{ ms}$ token generation latency on 16-core CPU.
-4. **Small Memory Footprint:** Strictly under $1.0\text{ GB}$ ($890\text{ MB}$ at `Q4_K_M`, Kawrakow 2023).
+4. **Small Memory Footprint:** Strictly under $1.0\text{ GB}$ ($\sim 890\text{ MB}$ at `Q4_0`, uniform 32-weight blocks with branchless AVX2/AVX-512 vector execution).
 
 ---
 
@@ -17,7 +17,7 @@ Technical documentation, research foundations, architecture specifications, and 
 
 | Driver Notebook | Target Runtime | Description | Colab Link |
 | :--- | :--- | :--- | :--- |
-| **[`train.ipynb`](notebooks/train.ipynb)** | Free T4 / A100 GPU | 1-epoch 16-bit rsLoRA distillation & GGUF export $\rightarrow$ Hugging Face Model Hub | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/bananamort/luau-qwen2.5-coder-1.5b-distillation/blob/main/notebooks/train.ipynb) |
+| **[`train.ipynb`](notebooks/train.ipynb)** | Free T4 / A100 GPU | 1-epoch rsLoRA QAD distillation & GGUF export $\rightarrow$ Hugging Face Model Hub | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/bananamort/luau-qwen2.5-coder-1.5b-distillation/blob/main/notebooks/train.ipynb) |
 | **[`prep_data.ipynb`](notebooks/prep_data.ipynb)** | CPU | Full dataset Darklua minification & FIM tokenization $\rightarrow$ Hugging Face Datasets Hub | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/bananamort/luau-qwen2.5-coder-1.5b-distillation/blob/main/notebooks/prep_data.ipynb) |
 | **[`smoke_train.ipynb`](notebooks/smoke_train.ipynb)** | Free T4 / A100 GPU | **~2 min** smoke test training (10 steps) & GGUF export | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/bananamort/luau-qwen2.5-coder-1.5b-distillation/blob/main/notebooks/smoke_train.ipynb) |
 | **[`smoke_prep_data.ipynb`](notebooks/smoke_prep_data.ipynb)** | CPU | **~30 sec** smoke test data prep (100 files) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/bananamort/luau-qwen2.5-coder-1.5b-distillation/blob/main/notebooks/smoke_prep_data.ipynb) |
@@ -32,10 +32,10 @@ Technical documentation, research foundations, architecture specifications, and 
 | **Architecture** | 28 Layers, $d=1536$, 12 Q-Heads, 2 KV-Heads (GQA) | 36 Layers, $d=2560$, 32 Q-Heads, 8 KV-Heads (GQA) | Ainslie et al. 2023 ([arXiv:2305.13245](https://arxiv.org/abs/2305.13245)) |
 | **Base Pre-training** | 5.5 Trillion tokens of source code | Qwen3 base code foundation | Hui et al. 2024 ([arXiv:2409.12186](https://arxiv.org/abs/2409.12186)) |
 | **Vocabulary Table** | 151,936 tokens (100% exact alignment) | 151,936 tokens | BPE tokenizer alignment |
-| **Training Precision** | Full 16-bit Base Weights + rsLoRA Adapters | Frozen Full 16-Bit Precision (`requires_grad = False`) | Direct logit extraction without quantization noise |
+| **Training Precision** | Full 16-bit Base Weights + rsLoRA + TorchAO INT4 QAT | Frozen Full 16-Bit Precision (`requires_grad = False`, `use_cache = False`) | Direct logit extraction without quantization noise |
 | **Adapter Config** | **rsLoRA** ($r=64, \alpha=64, \gamma = \alpha/\sqrt{r} = 8.0$) | N/A | Kalajdzievski 2023 ([arXiv:2312.03732](https://arxiv.org/abs/2312.03732)) |
-| **Distillation Objective** | Dual loss: $0.5 \mathcal{L}_{\text{CE}} + 0.5 T^2 D_{\text{KL}}$ ($T=2.0$) | Logit provider via `torch.inference_mode()` | Hinton et al. 2015 / Sanh et al. 2019 / Gu et al. 2024 |
-| **GGUF Quantization** | `Q4_K_M` ($\sim 890\text{ MB}$, sub-15 ms latency) | `Q4_K_XL` ($\sim 2.5\text{ GB}$) | Kawrakow 2023 (llama.cpp k-quants) |
+| **Distillation Objective** | Dual loss: $0.5 \mathcal{L}_{\text{CE}} + 0.5 T^2 D_{\text{KL}}$ ($T=2.0$, chunk size 2048) | Logit provider via `torch.inference_mode()` + `autocast(bf16)` | Hinton et al. 2015 / Sanh et al. 2019 / Gu et al. 2024 |
+| **GGUF Quantization** | `Q4_0` ($\sim 890\text{ MB}$, uniform 32-weight SIMD blocks) | `Q4_K_XL` ($\sim 2.5\text{ GB}$) | TorchAO QAT + llama.cpp branchless vector dot |
 
 ---
 
@@ -44,16 +44,18 @@ Technical documentation, research foundations, architecture specifications, and 
 | Parameter | Setting | Mathematical Justification & Academic Source |
 | :--- | :---: | :--- |
 | **`MAX_SEQ_LENGTH`** | `2048` | OpenAI FIM Context Window (Bavarian et al. 2022, [arXiv:2207.14255](https://arxiv.org/abs/2207.14255)) |
-| **`BATCH_SIZE`** | `2` | Micro-batch size per GPU forward pass ($\sim 2.4\text{ GB}$ activation memory) |
-| **`GRAD_ACCUM`** | `8` | Effective global batch size of 16 sequences ($32,768\text{ tokens/step}$, Kaplan et al. 2020) |
+| **`BATCH_SIZE`** | `4` | Micro-batch size per GPU forward pass ($\sim 15.2\text{ GB}$ peak VRAM on A100) |
+| **`GRAD_ACCUM`** | `4` | Effective global batch size of 16 sequences ($32,768\text{ tokens/step}$, Kaplan et al. 2020) |
+| **`CHUNK_SIZE`** | `2048` | Single-launch KL divergence execution per micro-step on 1D masked active tokens |
 | **`LEARNING_RATE`** | `2e-4` | Rank-stabilized LoRA adapter step size with $\gamma=8.0$ (Kalajdzievski 2023, [arXiv:2312.03732](https://arxiv.org/abs/2312.03732)) |
 | **`WARMUP_RATIO`** | `0.03` (3%) | Cosine schedule warmup to prevent early gradient spikes on random adapter init |
-| **`NUM_TRAIN_EPOCHS`** | `1` | Single full pass over the dataset ($\sim 500\text{k}$ unique FIM samples) |
+| **`NUM_TRAIN_EPOCHS`** | `1` | Single full pass over the dataset ($\sim 512\text{k}$ unique FIM samples) |
 | **`OPTIMIZER`** | `"paged_adamw_8bit"` | Blockwise 8-bit AdamW with CPU memory paging (Dettmers et al. 2022, [arXiv:2110.02861](https://arxiv.org/abs/2110.02861)) |
 | **`DISTILL_TEMPERATURE`**| `2.0` | Softmax temperature scaling for dark knowledge transfer (Hinton et al. 2015, [arXiv:1503.02531](https://arxiv.org/abs/1503.02531)) |
 | **`DISTILL_ALPHA`** | `0.5` | Balanced dual CE and KL divergence loss (Sanh et al. 2019, [arXiv:1910.01108](https://arxiv.org/abs/1910.01108)) |
-| **`LOG_STEPS`** | `25` | Progress stream frequency to console and WandB (200 data points over 5,000 steps) |
-| **`SAVE_STEPS`** | `1000` | Intermediate checkpoint frequency (every 20% of training) |
+| **`DATALOADER`** | `2 workers` | `persistent_workers=True` + `prefetch_factor=2` for pre-tokenized Arrow integers ($>10\text{k}$ samples/s) |
+| **`LOG_STEPS`** | `25` | Progress stream frequency to console and WandB |
+| **`SAVE_STEPS`** | `1000` | Intermediate checkpoint frequency (with non-blocking background Hub upload) |
 
 ---
 
@@ -140,10 +142,12 @@ python src/train.py \
   --dataset_filename "fim_train.parquet" \
   --upload_model_repo_id "bananamort/Luau-Qwen2.5-1.5B-FIM" \
   --epochs 1 \
-  --batch_size 2 \
-  --grad_accum 8 \
+  --batch_size 4 \
+  --grad_accum 4 \
+  --chunk_size 2048 \
   --learning_rate 2e-4 \
-  --quant_method "q4_k_m"
+  --qat_scheme "int4" \
+  --quant_method "q4_0"
 ```
 
 ---
@@ -154,7 +158,7 @@ Run fast local autocomplete with `llama-server`:
 
 ```bash
 llama-server \
-  -m ./gguf_output/unsloth.Q4_K_M.gguf \
+  -m ./checkpoints/final_gguf/unsloth.Q4_0.gguf \
   -c 2048 \
   -b 2048 \
   -ub 2048 \
@@ -164,3 +168,9 @@ llama-server \
   -t 16 \
   --port 8000
 ```
+
+---
+
+## 7. Technical Cross-Model Audit & Architecture Notes
+
+For deep-dive technical benchmarks, memory profiler data, QAD export lifecycle proofs, and cross-model adjudications (`gemini-3.7-flash` and `muse-spark-1.2-contributor`), see [`AUDIT.md`](AUDIT.md).
