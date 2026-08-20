@@ -25,7 +25,7 @@ if hasattr(sys.stderr, "reconfigure"):
 import torch
 import torch.nn.functional as F
 from unsloth import FastLanguageModel, is_bfloat16_supported
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, TrainerCallback
 from trl import SFTTrainer
 from datasets import load_dataset, Dataset
 from huggingface_hub import login, HfApi, hf_hub_download
@@ -124,6 +124,26 @@ class DistillationTrainer(SFTTrainer):
             total_loss = ce_loss
 
         return (total_loss, student_outputs) if return_outputs else total_loss
+
+# Hub Checkpoint Callback for real-time periodic upload
+class HubCheckpointCallback(TrainerCallback):
+    def __init__(self, repo_id, token):
+        self.repo_id = repo_id
+        self.token = token
+
+    def on_save(self, args, state, control, **kwargs):
+        if self.repo_id and self.token:
+            cp_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            if os.path.exists(cp_dir):
+                print(f"Uploading checkpoint-{state.global_step} to {self.repo_id}...")
+                api = HfApi()
+                api.upload_folder(
+                    folder_path=cp_dir,
+                    path_in_repo=f"checkpoints/checkpoint-{state.global_step}",
+                    repo_id=self.repo_id,
+                    token=self.token
+                )
+                print(f"Saved and uploaded checkpoint-{state.global_step} to Hugging Face Hub.")
 
 def main():
     args = get_args()
@@ -224,6 +244,8 @@ def main():
         learning_rate = args.learning_rate,
         fp16 = not is_bfloat16_supported(),
         bf16 = is_bfloat16_supported(),
+        save_strategy = "steps",
+        logging_strategy = "steps",
         logging_steps = args.log_steps,
         save_steps = args.save_steps,
         optim = args.optimizer,
@@ -232,11 +254,11 @@ def main():
         seed = 3407,
         output_dir = args.output_dir,
         report_to = report_to,
-        push_to_hub = bool(args.push_to_hub and args.upload_model_repo_id.strip() and hf_token),
-        hub_model_id = args.upload_model_repo_id.strip() if args.upload_model_repo_id.strip() else None,
-        hub_strategy = "checkpoint",
-        hub_token = hf_token.strip() if hf_token else None,
     )
+
+    callbacks = []
+    if args.push_to_hub and args.upload_model_repo_id.strip() and hf_token:
+        callbacks.append(HubCheckpointCallback(args.upload_model_repo_id.strip(), hf_token.strip()))
 
     trainer = DistillationTrainer(
         model = student_model,
@@ -249,6 +271,7 @@ def main():
         temperature = args.temperature,
         alpha = args.alpha,
         args = training_args,
+        callbacks = callbacks,
     )
 
     print("Starting training...")
