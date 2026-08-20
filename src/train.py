@@ -75,7 +75,8 @@ def get_args():
     # Export
     parser.add_argument("--save_16bit_merged", action="store_true", default=True, help="Save full 16-bit merged model")
     parser.add_argument("--export_gguf", action="store_true", default=True, help="Export GGUF binary")
-    parser.add_argument("--quant_method", type=str, default="q4_k_m", help="GGUF quantization method")
+    parser.add_argument("--quant_method", type=str, default="q4_0", help="GGUF quantization method")
+    parser.add_argument("--qat_scheme", type=str, default="", choices=["", "int4", "int8"], help="QAT scheme (int4 or int8)")
     
     # WandB
     parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
@@ -219,17 +220,20 @@ def main():
     )
 
     # Rank-Stabilized LoRA: delta_W = (alpha / sqrt(r)) * B * A (Kalajdzievski 2023, arXiv:2312.03732)
-    student_model = FastLanguageModel.get_peft_model(
-        student_model,
-        r = args.lora_r,
-        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_alpha = args.lora_alpha,
-        use_rslora = args.use_rslora,
-        lora_dropout = 0,
-        bias = "none",
-        use_gradient_checkpointing = "unsloth",
-        random_state = 3407,
-    )
+    peft_kwargs = {
+        "r": args.lora_r,
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "lora_alpha": args.lora_alpha,
+        "use_rslora": args.use_rslora,
+        "lora_dropout": 0,
+        "bias": "none",
+        "use_gradient_checkpointing": "unsloth",
+        "random_state": 3407,
+    }
+    if args.qat_scheme:
+        peft_kwargs["qat_scheme"] = args.qat_scheme
+        print(f"Applying QAT scheme ({args.qat_scheme})...")
+    student_model = FastLanguageModel.get_peft_model(student_model, **peft_kwargs)
     print(f"Student trainable parameters: {sum(p.numel() for p in student_model.parameters() if p.requires_grad):,}")
 
     # Teacher: Torpedo Luau-Qwen3-4B (Williams 2025)
@@ -321,6 +325,12 @@ def main():
     print("Starting training...")
     trainer_stats = trainer.train(resume_from_checkpoint=resume_cp)
     print("Training complete.")
+
+    if args.qat_scheme:
+        print("Converting QAT layers back to linear...")
+        from torchao.quantization import quantize_
+        from torchao.quantization.qat import QATConfig
+        quantize_(student_model, QATConfig(step="convert"))
 
     # 5. Save & Export
     # Save standalone LoRA adapter weights
