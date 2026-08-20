@@ -54,12 +54,12 @@ def get_args():
     # rsLoRA Parameters (Kalajdzievski 2023, arXiv:2312.03732)
     parser.add_argument("--lora_r", type=int, default=64, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=64, help="LoRA alpha")
-    parser.add_argument("--use_rslora", action="store_true", default=True, help="Enable Rank-Stabilized LoRA")
+    parser.add_argument("--use_rslora", action=argparse.BooleanOptionalAction, default=True, help="Enable Rank-Stabilized LoRA")
     
     # Distillation Parameters (Hinton et al. 2015, Sanh et al. 2019)
     parser.add_argument("--temperature", type=float, default=2.0, help="Softmax distillation temperature")
     parser.add_argument("--alpha", type=float, default=0.5, help="Dual-objective loss weight")
-    parser.add_argument("--chunk_size", type=int, default=512, help="Chunk size for KL loss")
+    parser.add_argument("--chunk_size", type=int, default=2048, help="Chunk size for KL loss")
     
     # Training Parameters
     parser.add_argument("--batch_size", type=int, default=4, help="Per-device micro-batch size")
@@ -76,8 +76,8 @@ def get_args():
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Resume training from local path or 'True'")
     
     # Export
-    parser.add_argument("--save_16bit_merged", action="store_true", default=True, help="Save full 16-bit merged model")
-    parser.add_argument("--export_gguf", action="store_true", default=True, help="Export GGUF binary")
+    parser.add_argument("--save_16bit_merged", action=argparse.BooleanOptionalAction, default=True, help="Save full 16-bit merged model")
+    parser.add_argument("--export_gguf", action=argparse.BooleanOptionalAction, default=True, help="Export GGUF binary")
     parser.add_argument("--quant_method", type=str, default="q4_0", help="GGUF quantization method")
     parser.add_argument("--qat_scheme", type=str, default="", choices=["", "int4", "int8"], help="QAT scheme (int4 or int8)")
     
@@ -106,8 +106,8 @@ class DistillationTrainer(SFTTrainer):
         student_logits = student_outputs.logits
 
         # Teacher forward pass (Frozen logit extraction)
-        with torch.inference_mode():
-            teacher_outputs = self.teacher_model(**model_inputs, return_dict=True)
+        with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            teacher_outputs = self.teacher_model(**model_inputs, return_dict=True, use_cache=False)
             teacher_logits = teacher_outputs.logits
 
         # Shift tokens for causal language modeling
@@ -135,17 +135,16 @@ class DistillationTrainer(SFTTrainer):
             kl_loss = (kl_sum / num_tokens) * (self.temperature ** 2)
             total_loss = (1.0 - self.alpha) * ce_loss + self.alpha * kl_loss
         else:
-            ce_loss = student_logits.sum() * 0.0
-            kl_loss = torch.tensor(0.0, device=student_logits.device)
-            total_loss = ce_loss
+            total_loss = student_logits.sum() * 0.0
+            return (total_loss, student_outputs) if return_outputs else total_loss
 
         # Log sub-losses
         if self.is_in_train and hasattr(self, "state") and self.state.global_step % self.args.logging_steps == 0:
             if getattr(self, "_last_logged_step", -1) != self.state.global_step:
                 self._last_logged_step = self.state.global_step
                 self.log({
-                    "loss_ce": round(ce_loss.item(), 4),
-                    "loss_kl": round(kl_loss.item(), 4),
+                    "loss_ce": round(ce_loss.detach().item(), 4),
+                    "loss_kl": round(kl_loss.detach().item(), 4),
                 })
 
         return (total_loss, student_outputs) if return_outputs else total_loss
@@ -216,7 +215,7 @@ def main():
         raise ValueError("Please specify --dataset_repo_id or provide a local dataset file.")
 
     print(f"Loading dataset from: {dataset_path}")
-    if str(dataset_path).endswith(".parquet"):
+    if str(args.dataset_filename).endswith(".parquet") or str(dataset_path).endswith(".parquet"):
         dataset = Dataset.from_parquet(dataset_path)
     else:
         dataset = load_dataset(dataset_path, split="train")
@@ -310,8 +309,10 @@ def main():
         learning_rate = args.learning_rate,
         fp16 = not is_bfloat16_supported(),
         bf16 = is_bfloat16_supported(),
-        tf32 = is_bfloat16_supported(),
+        tf32 = True,
         dataloader_num_workers = 2,
+        dataloader_prefetch_factor = 2,
+        dataloader_persistent_workers = True,
         dataloader_pin_memory = True,
         save_strategy = "steps",
         logging_strategy = "steps",
@@ -350,12 +351,6 @@ def main():
     trainer_stats = trainer.train(resume_from_checkpoint=resume_cp)
     print("Training complete.")
 
-    if args.qat_scheme:
-        print("Converting QAT layers back to linear...")
-        from torchao.quantization import quantize_
-        from torchao.quantization.qat import QATConfig
-        quantize_(student_model, QATConfig(step="convert"))
-
     # 5. Save & Export
     # Save standalone LoRA adapter weights
     final_lora_dir = os.path.join(args.output_dir, "final_lora")
@@ -363,8 +358,8 @@ def main():
     tokenizer.save_pretrained(final_lora_dir)
     print(f"Saved LoRA adapters to {final_lora_dir}")
 
-    # Save full merged 16-bit master model (SafeTensors)
-    if args.save_16bit_merged:
+    # Save full merged 16-bit master model (SafeTensors) only if not in QAT mode
+    if args.save_16bit_merged and not args.qat_scheme:
         merged_16bit_dir = os.path.join(args.output_dir, "final_merged_16bit")
         student_model.save_pretrained_merged(merged_16bit_dir, tokenizer, save_method="merged_16bit")
         print(f"Saved merged 16-bit model to {merged_16bit_dir}")

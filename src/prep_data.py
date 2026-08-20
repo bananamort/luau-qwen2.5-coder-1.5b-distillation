@@ -73,10 +73,6 @@ def minify_code(code: str, tmp_dir: str, task_id: str) -> str:
     cfg = os.path.join(tmp_dir, "darklua_config.json")
     src = os.path.join(tmp_dir, f"in_{task_id}.luau")
     dst = os.path.join(tmp_dir, f"out_{task_id}.luau")
-    
-    if not os.path.exists(cfg):
-        with open(cfg, "w", encoding="utf-8") as f:
-            json.dump(DARKLUA_CONFIG, f)
             
     with open(src, "w", encoding="utf-8") as f:
         f.write(code)
@@ -204,6 +200,9 @@ def main():
     total_samples = 0
 
     with tempfile.TemporaryDirectory() as tmp_dir:
+        cfg_file = os.path.join(tmp_dir, "darklua_config.json")
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            json.dump(DARKLUA_CONFIG, f)
         tasks = [(code, tok, args.max_seq_len, args.cuts_per_file, tmp_dir, f"{idx}_{uuid.uuid4().hex[:6]}") for idx, code in enumerate(codes)]
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             for idx, result in enumerate(executor.map(process_single_code, tasks, chunksize=100)):
