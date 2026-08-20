@@ -30,7 +30,7 @@ if hasattr(sys.stderr, "reconfigure"):
 import torch
 import torch.nn.functional as F
 from unsloth import FastLanguageModel, is_bfloat16_supported
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, TrainerCallback, DataCollatorForSeq2Seq
 from trl import SFTTrainer
 from datasets import load_dataset, Dataset
 from huggingface_hub import login, HfApi, hf_hub_download
@@ -57,10 +57,11 @@ def get_args():
     # Distillation Parameters (Hinton et al. 2015, Sanh et al. 2019)
     parser.add_argument("--temperature", type=float, default=2.0, help="Softmax distillation temperature")
     parser.add_argument("--alpha", type=float, default=0.5, help="Dual-objective loss weight")
+    parser.add_argument("--chunk_size", type=int, default=512, help="Chunk size for KL loss")
     
     # Training Parameters
-    parser.add_argument("--batch_size", type=int, default=2, help="Per-device micro-batch size")
-    parser.add_argument("--grad_accum", type=int, default=8, help="Gradient accumulation steps")
+    parser.add_argument("--batch_size", type=int, default=4, help="Per-device micro-batch size")
+    parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs")
     parser.add_argument("--max_steps", type=int, default=-1, help="Max steps (overrides epochs if > 0)")
@@ -87,11 +88,12 @@ def get_args():
 
 # Distillation Trainer (Hinton et al. 2015, arXiv:1503.02531; Gu et al. 2024, arXiv:2306.08543)
 class DistillationTrainer(SFTTrainer):
-    def __init__(self, *args, teacher_model=None, temperature=2.0, alpha=0.5, **kwargs):
+    def __init__(self, *args, teacher_model=None, temperature=2.0, alpha=0.5, chunk_size=512, **kwargs):
         super().__init__(*args, **kwargs)
         self.teacher_model = teacher_model
         self.temperature = temperature
         self.alpha = alpha
+        self.chunk_size = chunk_size
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         labels = inputs.get("labels")
@@ -118,13 +120,24 @@ class DistillationTrainer(SFTTrainer):
             ignore_index = -100,
         )
 
-        # Softmax KL divergence: L_kd = T^2 * KL(softmax(z_t / T) || softmax(z_s / T)) (Hinton et al. 2015)
+        # Chunked KL divergence (Shoeybi et al. 2019)
         mask = (shift_labels != -100)
         if mask.sum() > 0:
-            student_log_probs = F.log_softmax(shift_student[mask] / self.temperature, dim=-1)
-            teacher_probs = F.softmax(shift_teacher[mask] / self.temperature, dim=-1)
-            kl_loss = F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (self.temperature ** 2)
-            # Dual-objective loss: (1 - alpha) * L_ce + alpha * L_kd (Sanh et al. 2019, arXiv:1910.01108)
+            student_masked = shift_student[mask]
+            teacher_masked = shift_teacher[mask]
+            num_tokens = student_masked.size(0)
+
+            kl_sum = 0.0
+            chunk_size = self.chunk_size
+            for i in range(0, num_tokens, chunk_size):
+                s_chunk = student_masked[i : i + chunk_size]
+                t_chunk = teacher_masked[i : i + chunk_size]
+                s_log_probs = F.log_softmax(s_chunk / self.temperature, dim=-1)
+                t_probs = F.softmax(t_chunk / self.temperature, dim=-1)
+                kl_chunk = F.kl_div(s_log_probs, t_probs, reduction="sum")
+                kl_sum = kl_sum + kl_chunk
+
+            kl_loss = (kl_sum / num_tokens) * (self.temperature ** 2)
             total_loss = (1.0 - self.alpha) * ce_loss + self.alpha * kl_loss
         else:
             total_loss = ce_loss
@@ -239,11 +252,13 @@ def main():
     # Teacher: Torpedo Luau-Qwen3-4B (Williams 2025)
     # Evaluation setup: eval() + requires_grad=False + torch.inference_mode() disables dropout, gradient buffers, and autograd graph
     print(f"Loading 4B Torpedo Teacher ({args.teacher_model}) in full 16-bit...")
-    teacher_model = AutoModelForCausalLM.from_pretrained(
-        args.teacher_model,
-        device_map = "auto",
-        torch_dtype = "auto",
+    teacher_model, _ = FastLanguageModel.from_pretrained(
+        model_name = args.teacher_model,
+        max_seq_length = args.max_seq_length,
+        dtype = None,
+        load_in_4bit = False,
     )
+    FastLanguageModel.for_inference(teacher_model)
     teacher_model.eval()
     for p in teacher_model.parameters():
         p.requires_grad = False
@@ -308,16 +323,20 @@ def main():
     if args.push_to_hub and args.upload_model_repo_id.strip() and hf_token:
         callbacks.append(HubCheckpointCallback(args.upload_model_repo_id.strip(), hf_token.strip()))
 
+    data_collator = DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8)
+
     trainer = DistillationTrainer(
         model = student_model,
         teacher_model = teacher_model,
         tokenizer = tokenizer,
         train_dataset = dataset,
+        data_collator = data_collator,
         max_seq_length = args.max_seq_length,
         dataset_num_proc = 2,
         packing = False,
         temperature = args.temperature,
         alpha = args.alpha,
+        chunk_size = args.chunk_size,
         args = training_args,
         callbacks = callbacks,
     )
