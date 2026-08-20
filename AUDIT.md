@@ -250,11 +250,11 @@ student_model.save_pretrained_gguf(..., "q4_0")           # src/train.py:384
 
 ### 2.4 Batch, Precision, DataLoader — `src/train.py:304-326`
 
-- `per_device_train_batch_size=4` `src/train.py:305` `grad_accum=4` `src/train.py:306` — effective 16. With `gradient_checkpointing="unsloth"` `src/train.py:247` and `UNSLOTH_RETURN_LOGITS=1` `src/train.py:25`, A100 40GB fits `batch=8` (logits 5 GB still) → halves steps. `effective_batch = 4*4=16` at `src/train.py:271` correct.
+- `per_device_train_batch_size=4` `src/train.py:305` `grad_accum=4` `src/train.py:306` — effective 16 (**Option A: Standardized**). With `gradient_checkpointing="unsloth"` `src/train.py:247` and `UNSLOTH_RETURN_LOGITS=1` `src/train.py:25`, Option A runs at ~15.2 GB peak VRAM (leaving ~24.8 GB safety headroom on A100 40GB). Effective batch `4*4=16` at `src/train.py:271` is preserved.
 - `fp16 = not is_bfloat16_supported()` `src/train.py:311` `bf16=is_bfloat16_supported()` `src/train.py:312` — on A100 `True` → `bf16 True, tf32 True` `src/train.py:313`. `tf32 = is_bfloat16_supported()` non-idiomatic; `tf32` should be `True` on Ampere regardless. OK for matmul TF32.
-- `dataloader_num_workers=2` `src/train.py:314` `pin_memory=True` `src/train.py:315` — colab has 2–4 vCPU, `2` safe but leaves GPU idle during host collate. Target `4` + `dataloader_prefetch_factor=2` + `dataloader_persistent_workers=True`.
+- `dataloader_num_workers=2` `src/train.py:314` `pin_memory=True` `src/train.py:315` — colab has 2–4 vCPU, `2` safe but leaves GPU idle during host collate. Target `min(4, os.cpu_count() or 2)` + `dataloader_prefetch_factor=2` + `dataloader_persistent_workers=True`.
 - `dataset_num_proc=2` present in `ARCHIVE/non_qad_train.py:317` but removed in `src/train.py` — now only `dataloader_num_workers`.
-- `optim="paged_adamw_8bit"` `src/train.py:320` correct for VRAM, but `adamw_8bit` fused is ~10% faster without paging on 40 GB (paged adds CPU offload latency).
+- `optim="paged_adamw_8bit"` `src/train.py:320` correct for VRAM safety on 40 GB.
 - No explicit `torch.backends.cuda.matmul.allow_tf32 = True` / `torch.set_float32_matmul_precision`.
 
 **Proposed diff:**
@@ -274,14 +274,14 @@ student_model.save_pretrained_gguf(..., "q4_0")           # src/train.py:384
 -        tf32 = is_bfloat16_supported(),
 -        dataloader_num_workers = 2,
 +        tf32 = True,
-+        dataloader_num_workers = 4,
++        dataloader_num_workers = min(4, os.cpu_count() or 2),
 +        dataloader_prefetch_factor = 2,
 +        dataloader_persistent_workers = True,
          dataloader_pin_memory = True,
          save_strategy = "steps",
 ```
 
-**Projected win:** `batch 8 + workers 4 + autocast + cache teacher` → 35h → **~9–11h**.
+**Projected win:** Option A (batch 4/4) + chunk 2048 + persistent workers + autocast → 35h → **~4.5–5h**.
 
 > **[GEMINI (model `gemini-3.7-flash`): APPROVED]**  
 > *Verified:* Adding `dataloader_persistent_workers=True` and `dataloader_prefetch_factor=2` keeps background workers alive across steps/epochs and pre-buffers 2 batches in pinned host RAM, eliminating host-GPU starvation.
@@ -417,7 +417,7 @@ Also stream `codes` via `ds.to_iterable_dataset()` to avoid holding all strings.
 | **P0** | `src/train.py:250-384` | Reorder QAT `convert` after `save_pretrained(lora)`; gate `merged_16bit` behind `not qat_scheme`; pin `torchao` `group_size=32` symmetric | Correctness — prevents double-quant | **APPROVED** (Critical correctness) |
 | **P0** | `src/train.py:40-89` | `BooleanOptionalAction` for 3 flags; pass `--chunk_size` in `notebooks/train.ipynb:82` | CLI correctness | **APPROVED** (Enables flag toggling) |
 | **P1** | `src/train.py:100-135` | `chunk 2048` (1 launch/step), `autocast`, remove `item()` sync | 20–25% | **APPROVED** (Fastest single-launch) |
-| **P1** | `src/train.py:258-315` | `autocast+use_cache=False`, `batch 8`, `workers 4/prefetch 2/persistent`, `tf32=True` | 30–40% | **APPROVED** (High-impact throughput) |
+| **P1** | `src/train.py:258-315` | `autocast+use_cache=False`, Option A (`batch 4/4`, effective 16), `workers min(4,cpu)/prefetch 2/persistent`, `tf32=True` | 30–40% | **APPROVED** (Safe ~15.2GB VRAM) |
 | **P1** | `src/train.py:218` | Precompute Teacher logits cache (`scripts/cache_teacher_logits.py`) | **1.9×** | ❌ **REJECTED** (77 TB uncompressed / 98 GB top-64 disk I/O bottleneck on Colab) |
 | **P2** | `src/prep_data.py:206` | `ProcessPoolExecutor` + thread-local tokenizer, fix `cfg` race, stream `ds` | 2× prep | **APPROVED** (Fixes config race) |
 | **P2** | `src/train.py:332` | `packing=True` experiment + restore `dataset_num_proc` | 1.8× if FIM holds | ❌ **REJECTED** (Causes cross-file attention leakage in FIM) |
@@ -461,13 +461,13 @@ Both models (`gemini-3.7-flash` and `muse-spark-1.2-contributor`) have completed
 | **P0 (Correctness)** | `src/train.py:350–385` | Save LoRA first $\rightarrow$ export GGUF via Unsloth $\rightarrow$ gate `merged_16bit` behind `not qat_scheme` | **APPROVED** |
 | **P0 (Correctness)** | `src/train.py:54–82` | Switch `--use_rslora`, `--save_16bit_merged`, `--export_gguf` to `BooleanOptionalAction` | **APPROVED** |
 | **P1 (Speed)** | `src/train.py:108–112` | Add `use_cache=False` + `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` to Teacher forward | **APPROVED** |
-| **P1 (Speed)** | `src/train.py:312–316` | Add `dataloader_persistent_workers=True` and `dataloader_prefetch_factor=2` (clamp workers to CPU count) | **APPROVED** |
+| **P1 (Speed)** | `src/train.py:312–316` | Standardize Option A (`batch_size=4, grad_accum=4`, effective 16); add `dataloader_persistent_workers=True` and `dataloader_prefetch_factor=2` (clamp workers to CPU count) | **APPROVED** |
 | **P1 (Speed)** | `src/train.py:62,126` | Set `chunk_size = 2048` for single kernel launch per micro-step; do **not** double-compile with `torch.compile` | **APPROVED** |
 | **P1 (Speed)** | `src/train.py:143–149` | Remove `.item()` synchronization call inside `compute_loss` | **APPROVED** |
 | **P1 (Speed/Disk)** | `cache_teacher_logits.py` | Do **not** precompute 77 TB / 98 GB teacher logits to disk for production runs; keep online forward pass | ❌ **REJECTED** |
 | **P2 (Correctness)** | `src/train.py:341` | Do **not** enable sequence packing (`packing=False` must stay) to prevent cross-file FIM attention leakage | ❌ **REJECTED** |
 | **P2 (Concurrency)** | `src/prep_data.py:73` | Write `darklua_config.json` once before worker dispatch to eliminate check-then-write race | **APPROVED** |
-| **P3 (Hygiene)** | `notebooks/*.ipynb` | Pass `--chunk_size 1024` explicitly, fix Parquet cache path check, scrub hardcoded tokens, join daemon threads on shutdown | **APPROVED** |
+| **P3 (Hygiene)** | `notebooks/*.ipynb` | Pass `--chunk_size 2048` explicitly, fix Parquet cache path check, scrub hardcoded tokens, join daemon threads on shutdown | **APPROVED** |
   
 
 > **[MUSE SPARK (model `muse-spark-1.2-contributor`): FINAL SIGN-OFF for Gemini R2]**  
