@@ -33,6 +33,7 @@ import torch
 import torch.nn.functional as F
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from transformers import AutoTokenizer, TrainingArguments, TrainerCallback, DataCollatorForSeq2Seq
+from transformers.utils import is_flash_attn_2_available
 from trl import SFTTrainer
 from datasets import load_dataset, Dataset
 from huggingface_hub import login, HfApi, hf_hub_download
@@ -234,6 +235,8 @@ def main():
     print(f"Porting tokenizer & chat template from Teacher ({args.teacher_model})...")
     tokenizer = AutoTokenizer.from_pretrained(args.teacher_model)
 
+    attn = "flash_attention_2"  # hard fail if wheel missing
+
     # Student: Qwen2.5-Coder-1.5B (Hui et al. 2024, arXiv:2409.12186)
     print(f"Loading 1.5B Student ({args.model_name}) with rsLoRA (use_rslora={args.use_rslora})...")
     student_model, _ = FastLanguageModel.from_pretrained(
@@ -241,6 +244,7 @@ def main():
         max_seq_length = args.max_seq_length,
         dtype = None, # Unsloth autodetects native BF16 / FP16
         load_in_4bit = False, # Full 16-bit precision base weights
+        attn_implementation = attn,
     )
 
     # Rank-Stabilized LoRA: delta_W = (alpha / sqrt(r)) * B * A (Kalajdzievski 2023, arXiv:2312.03732)
@@ -268,6 +272,7 @@ def main():
         max_seq_length = args.max_seq_length,
         dtype = None,
         load_in_4bit = False,
+        attn_implementation = attn,
     )
     FastLanguageModel.for_inference(teacher_model)
     teacher_model.eval()
