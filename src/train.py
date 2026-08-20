@@ -14,6 +14,7 @@ import os
 import sys
 import argparse
 import warnings
+import threading
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
 os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
@@ -128,7 +129,7 @@ class DistillationTrainer(SFTTrainer):
 
         return (total_loss, student_outputs) if return_outputs else total_loss
 
-# Hub Checkpoint Callback for real-time periodic upload
+# Hub Checkpoint Callback for real-time background upload
 class HubCheckpointCallback(TrainerCallback):
     def __init__(self, repo_id, token):
         self.repo_id = repo_id
@@ -137,16 +138,23 @@ class HubCheckpointCallback(TrainerCallback):
     def on_save(self, args, state, control, **kwargs):
         if self.repo_id and self.token:
             cp_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
-            if os.path.exists(cp_dir):
-                print(f"Uploading checkpoint-{state.global_step} to {self.repo_id}...")
-                api = HfApi()
-                api.upload_folder(
-                    folder_path=cp_dir,
-                    path_in_repo=f"checkpoints/checkpoint-{state.global_step}",
-                    repo_id=self.repo_id,
-                    token=self.token
-                )
-                print(f"Saved and uploaded checkpoint-{state.global_step} to Hugging Face Hub.")
+            step = state.global_step
+            repo_id = self.repo_id
+            token = self.token
+
+            def _async_upload():
+                if os.path.exists(cp_dir):
+                    print(f"Uploading checkpoint-{step} to {repo_id} in background...")
+                    api = HfApi()
+                    api.upload_folder(
+                        folder_path=cp_dir,
+                        path_in_repo=f"checkpoints/checkpoint-{step}",
+                        repo_id=repo_id,
+                        token=token
+                    )
+                    print(f"Saved and uploaded checkpoint-{step} to Hugging Face Hub.")
+
+            threading.Thread(target=_async_upload, daemon=True).start()
 
 def main():
     args = get_args()
