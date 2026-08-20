@@ -20,3 +20,4 @@ darklua
 darklua.zip
 src/bin/darklua
 .env
+scratch/
