@@ -120,7 +120,7 @@ class DistillationTrainer(SFTTrainer):
             ignore_index = -100,
         )
 
-        # Chunked KL divergence (Shoeybi et al. 2019)
+        # Chunked KL divergence (Shoeybi et al. 2019, arXiv:1909.08053; Hsu et al. 2024, arXiv:2410.10989)
         mask = (shift_labels != -100)
         if mask.sum() > 0:
             student_masked = shift_student[mask]
