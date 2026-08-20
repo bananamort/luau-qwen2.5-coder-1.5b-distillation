@@ -64,6 +64,8 @@ def get_args():
     parser.add_argument("--log_steps", type=int, default=25, help="Logging steps")
     parser.add_argument("--save_steps", type=int, default=1000, help="Checkpoint save steps")
     parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Output directory")
+    parser.add_argument("--push_to_hub", action="store_true", default=False, help="Push intermediate checkpoints to Hugging Face Hub")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Resume training from local path or 'True'")
     
     # Export
     parser.add_argument("--save_16bit_merged", action="store_true", default=True, help="Save full 16-bit merged model")
@@ -230,6 +232,10 @@ def main():
         seed = 3407,
         output_dir = args.output_dir,
         report_to = report_to,
+        push_to_hub = bool(args.push_to_hub and args.upload_model_repo_id.strip() and hf_token),
+        hub_model_id = args.upload_model_repo_id.strip() if args.upload_model_repo_id.strip() else None,
+        hub_strategy = "checkpoint",
+        hub_token = hf_token.strip() if hf_token else None,
     )
 
     trainer = DistillationTrainer(
@@ -246,7 +252,10 @@ def main():
     )
 
     print("Starting training...")
-    trainer_stats = trainer.train()
+    resume_cp = args.resume_from_checkpoint
+    if str(resume_cp).lower() in ("true", "1"):
+        resume_cp = True
+    trainer_stats = trainer.train(resume_from_checkpoint=resume_cp)
     print("Training complete.")
 
     # 5. Save & Export
