@@ -165,6 +165,9 @@ def main():
     if hf_token:
         login(token=hf_token.strip())
         print("Hugging Face authenticated.")
+        if args.upload_model_repo_id.strip():
+            api = HfApi()
+            api.create_repo(repo_id=args.upload_model_repo_id.strip(), exist_ok=True, token=hf_token.strip())
 
     if args.use_wandb and (args.wandb_token or os.environ.get("WANDB_API_KEY")):
         wb_key = (args.wandb_token or os.environ.get("WANDB_API_KEY")).strip()
@@ -333,7 +336,6 @@ def main():
         print(f"Saved merged 16-bit model to {merged_16bit_dir}")
         if args.upload_model_repo_id.strip() and hf_token:
             api = HfApi()
-            api.create_repo(repo_id=args.upload_model_repo_id.strip(), exist_ok=True, token=hf_token.strip())
             api.upload_folder(folder_path=merged_16bit_dir, repo_id=args.upload_model_repo_id.strip(), token=hf_token.strip())
 
     # Export GGUF binary for llama-server
