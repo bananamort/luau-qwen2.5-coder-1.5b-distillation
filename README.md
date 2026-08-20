@@ -168,9 +168,3 @@ llama-server \
   -t 16 \
   --port 8000
 ```
-
----
-
-## 7. Technical Cross-Model Audit & Architecture Notes
-
-For deep-dive technical benchmarks, memory profiler data, QAD export lifecycle proofs, and cross-model adjudications (`gemini-3.7-flash` and `muse-spark-1.2-contributor`), see [`AUDIT.md`](AUDIT.md).

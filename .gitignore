@@ -21,3 +21,4 @@ darklua.zip
 src/bin/darklua
 .env
 scratch/
+AUDIT.md
