@@ -14,7 +14,6 @@ import os
 import sys
 import argparse
 import warnings
-import threading
 import shutil
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
@@ -30,7 +29,7 @@ if hasattr(sys.stderr, "reconfigure"):
 import torch
 import torch.nn.functional as F
 from unsloth import FastLanguageModel, is_bfloat16_supported
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, TrainerCallback, DataCollatorForSeq2Seq
+from transformers import AutoTokenizer, TrainingArguments, TrainerCallback, DataCollatorForSeq2Seq
 from trl import SFTTrainer
 from datasets import load_dataset, Dataset
 from huggingface_hub import login, HfApi, hf_hub_download
@@ -109,24 +108,17 @@ class DistillationTrainer(SFTTrainer):
             teacher_logits = teacher_outputs.logits
 
         # Shift tokens for causal language modeling
-        shift_student = student_logits[..., :-1, :].contiguous()
-        shift_teacher = teacher_logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-
-        # Hard Cross-Entropy Loss
-        ce_loss = F.cross_entropy(
-            shift_student.view(-1, shift_student.shape[-1]),
-            shift_labels.view(-1),
-            ignore_index = -100,
-        )
-
-        # Chunked KL divergence (Shoeybi et al. 2019, arXiv:1909.08053; Hsu et al. 2024, arXiv:2410.10989)
+        shift_labels = labels[:, 1:]
         mask = (shift_labels != -100)
-        if mask.sum() > 0:
-            student_masked = shift_student[mask]
-            teacher_masked = shift_teacher[mask]
+        if mask.any():
+            student_masked = student_logits[:, :-1][mask]
+            teacher_masked = teacher_logits[:, :-1][mask]
+
+            # Hard Cross-Entropy Loss
+            ce_loss = F.cross_entropy(student_masked, shift_labels[mask])
             num_tokens = student_masked.size(0)
 
+            # Chunked KL divergence (Shoeybi et al. 2019, arXiv:1909.08053; Hsu et al. 2024, arXiv:2410.10989)
             kl_sum = 0.0
             chunk_size = self.chunk_size
             for i in range(0, num_tokens, chunk_size):
@@ -140,7 +132,8 @@ class DistillationTrainer(SFTTrainer):
             kl_loss = (kl_sum / num_tokens) * (self.temperature ** 2)
             total_loss = (1.0 - self.alpha) * ce_loss + self.alpha * kl_loss
         else:
-            kl_loss = torch.tensor(0.0, device=shift_student.device)
+            ce_loss = student_logits.sum() * 0.0
+            kl_loss = torch.tensor(0.0, device=student_logits.device)
             total_loss = ce_loss
 
         # Log sub-losses
@@ -345,7 +338,6 @@ def main():
         train_dataset = dataset,
         data_collator = data_collator,
         max_seq_length = args.max_seq_length,
-        dataset_num_proc = 2,
         packing = False,
         temperature = args.temperature,
         alpha = args.alpha,
