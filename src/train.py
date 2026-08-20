@@ -214,9 +214,7 @@ def main():
 
     print(f"Loading dataset from: {dataset_path}")
     if str(dataset_path).endswith(".parquet"):
-        import pandas as pd
-        df = pd.read_parquet(dataset_path)
-        dataset = Dataset.from_pandas(df)
+        dataset = Dataset.from_parquet(dataset_path)
     else:
         dataset = load_dataset(dataset_path, split="train")
     print(f"Dataset loaded: {len(dataset):,} samples.")
@@ -366,39 +364,32 @@ def main():
     # Save full merged 16-bit master model (SafeTensors)
     if args.save_16bit_merged:
         merged_16bit_dir = os.path.join(args.output_dir, "final_merged_16bit")
-        student_model.save_pretrained_merged(merged_16bit_dir, tokenizer, save_method = "merged_16bit")
+        student_model.save_pretrained_merged(merged_16bit_dir, tokenizer, save_method="merged_16bit")
         print(f"Saved merged 16-bit model to {merged_16bit_dir}")
         if args.upload_model_repo_id.strip() and hf_token:
-            api = HfApi()
-            api.upload_folder(folder_path=merged_16bit_dir, repo_id=args.upload_model_repo_id.strip(), token=hf_token.strip())
+            print(f"Uploading merged 16-bit model to {args.upload_model_repo_id.strip()}...")
+            student_model.push_to_hub_merged(
+                args.upload_model_repo_id.strip(),
+                tokenizer,
+                save_method="merged_16bit",
+                token=hf_token.strip(),
+            )
 
     # Export GGUF binary for llama-server
     if args.export_gguf:
-        gguf_dir = "./gguf_output"
+        gguf_dir = os.path.join(args.output_dir, "final_gguf")
         print(f"Exporting to GGUF ({args.quant_method})...")
-        student_model.save_pretrained_gguf(gguf_dir, tokenizer, quantization_method = args.quant_method)
+        student_model.save_pretrained_gguf(gguf_dir, tokenizer, quantization_method=args.quant_method)
         print(f"Saved GGUF model to {gguf_dir}")
 
         if args.upload_model_repo_id.strip() and hf_token:
-            api = HfApi()
-            api.upload_folder(
-                folder_path=gguf_dir,
-                path_in_repo="gguf",
-                repo_id=args.upload_model_repo_id.strip(),
-                token=hf_token.strip()
+            print(f"Uploading GGUF ({args.quant_method}) to {args.upload_model_repo_id.strip()}...")
+            student_model.push_to_hub_gguf(
+                args.upload_model_repo_id.strip(),
+                tokenizer,
+                quantization_method=args.quant_method,
+                token=hf_token.strip(),
             )
-            import glob
-            gguf_files = glob.glob(f"{gguf_dir}/**/*.gguf", recursive=True) + glob.glob(f"{gguf_dir}*.gguf") + glob.glob("**/*.gguf", recursive=True)
-            for gf in set(gguf_files):
-                filename = os.path.basename(gf)
-                print(f"Uploading GGUF binary {gf} to gguf/{filename}...")
-                api.upload_file(
-                    path_or_fileobj=gf,
-                    path_in_repo=f"gguf/{filename}",
-                    repo_id=args.upload_model_repo_id.strip(),
-                    token=hf_token.strip()
-                )
-            print("Upload complete.")
 
 if __name__ == "__main__":
     main()
