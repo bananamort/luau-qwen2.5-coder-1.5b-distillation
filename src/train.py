@@ -13,7 +13,10 @@ Knowledge Distillation & Fine-Tuning Driver using Unsloth & rsLoRA:
 import os
 import sys
 import argparse
+import warnings
 
+warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
+os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
