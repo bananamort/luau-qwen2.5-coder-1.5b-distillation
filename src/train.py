@@ -15,6 +15,7 @@ import sys
 import argparse
 import warnings
 import threading
+import shutil
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
 os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
@@ -246,6 +247,35 @@ def main():
     warmup_steps = max(1, int(total_steps * args.warmup_ratio))
 
     # 4. Distillation Trainer Setup
+    resume_cp = args.resume_from_checkpoint
+    if str(resume_cp).lower() in ("true", "1"):
+        resume_cp = True
+
+    # Restore checkpoints from Hugging Face Hub
+    if resume_cp and args.upload_model_repo_id.strip() and hf_token:
+        import glob
+        print(f"Fetching remote checkpoints from {args.upload_model_repo_id.strip()}...")
+        try:
+            from huggingface_hub import snapshot_download
+            snapshot_download(
+                repo_id=args.upload_model_repo_id.strip(),
+                allow_patterns=["checkpoints/**"],
+                local_dir="./hf_checkpoints_cache",
+                token=hf_token.strip()
+            )
+            dl_cps = glob.glob("./hf_checkpoints_cache/checkpoints/checkpoint-*")
+            if dl_cps:
+                os.makedirs(args.output_dir, exist_ok=True)
+                for cp in dl_cps:
+                    cp_name = os.path.basename(cp)
+                    dst = os.path.join(args.output_dir, cp_name)
+                    if not os.path.exists(dst):
+                        shutil.copytree(cp, dst)
+                print(f"Restored {len(dl_cps)} checkpoint(s) to {args.output_dir}.")
+                resume_cp = True
+        except Exception as e:
+            print(f"Failed to fetch remote checkpoints: {e}")
+
     training_args = TrainingArguments(
         per_device_train_batch_size = args.batch_size,
         gradient_accumulation_steps = args.grad_accum,
@@ -286,9 +316,6 @@ def main():
     )
 
     print("Starting training...")
-    resume_cp = args.resume_from_checkpoint
-    if str(resume_cp).lower() in ("true", "1"):
-        resume_cp = True
     trainer_stats = trainer.train(resume_from_checkpoint=resume_cp)
     print("Training complete.")
 
