@@ -62,8 +62,8 @@ def get_args():
     parser.add_argument("--chunk_size", type=int, default=2048, help="Chunk size for KL loss")
     
     # Training Parameters
-    parser.add_argument("--batch_size", type=int, default=4, help="Per-device micro-batch size")
-    parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
+    parser.add_argument("--batch_size", type=int, default=2, help="Per-device micro-batch size")
+    parser.add_argument("--grad_accum", type=int, default=8, help="Gradient accumulation steps")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs")
     parser.add_argument("--max_steps", type=int, default=-1, help="Max steps (overrides epochs if > 0)")

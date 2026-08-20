@@ -44,8 +44,8 @@ Technical documentation, research foundations, architecture specifications, and 
 | Parameter | Setting | Mathematical Justification & Academic Source |
 | :--- | :---: | :--- |
 | **`MAX_SEQ_LENGTH`** | `2048` | OpenAI FIM Context Window (Bavarian et al. 2022, [arXiv:2207.14255](https://arxiv.org/abs/2207.14255)) |
-| **`BATCH_SIZE`** | `4` | Micro-batch size per GPU forward pass ($\sim 15.2\text{ GB}$ peak VRAM on A100) |
-| **`GRAD_ACCUM`** | `4` | Effective global batch size of 16 sequences ($32,768\text{ tokens/step}$, Kaplan et al. 2020) |
+| **`BATCH_SIZE`** | `2` | Micro-batch size per GPU forward pass ($\sim 8.4\text{ GB}$ peak VRAM on A100) |
+| **`GRAD_ACCUM`** | `8` | Effective global batch size of 16 sequences ($32,768\text{ tokens/step}$, Kaplan et al. 2020) |
 | **`CHUNK_SIZE`** | `2048` | Single-launch KL divergence execution per micro-step on 1D masked active tokens |
 | **`LEARNING_RATE`** | `2e-4` | Rank-stabilized LoRA adapter step size with $\gamma=8.0$ (Kalajdzievski 2023, [arXiv:2312.03732](https://arxiv.org/abs/2312.03732)) |
 | **`WARMUP_RATIO`** | `0.03` (3%) | Cosine schedule warmup to prevent early gradient spikes on random adapter init |
@@ -142,8 +142,8 @@ python src/train.py \
   --dataset_filename "fim_train.parquet" \
   --upload_model_repo_id "bananamort/Luau-Qwen2.5-1.5B-FIM" \
   --epochs 1 \
-  --batch_size 4 \
-  --grad_accum 4 \
+  --batch_size 2 \
+  --grad_accum 8 \
   --chunk_size 2048 \
   --learning_rate 2e-4 \
   --qat_scheme "int4" \
