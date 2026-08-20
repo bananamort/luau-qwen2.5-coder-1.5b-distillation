@@ -95,12 +95,12 @@ class DistillationTrainer(SFTTrainer):
         model_inputs = {k: v for k, v in inputs.items() if k != "labels"}
 
         # Student forward pass (Fast Unsloth Triton kernels)
-        student_outputs = model(**model_inputs)
+        student_outputs = model(**model_inputs, return_dict=True)
         student_logits = student_outputs.logits
 
         # Teacher forward pass (Frozen logit extraction)
         with torch.inference_mode():
-            teacher_outputs = self.teacher_model(**model_inputs)
+            teacher_outputs = self.teacher_model(**model_inputs, return_dict=True)
             teacher_logits = teacher_outputs.logits
 
         # Shift tokens for causal language modeling
