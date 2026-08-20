@@ -154,6 +154,7 @@ class HubCheckpointCallback(TrainerCallback):
     def __init__(self, repo_id, token):
         self.repo_id = repo_id
         self.token = token
+        self.threads = []
 
     def on_save(self, args, state, control, **kwargs):
         if self.repo_id and self.token:
@@ -174,7 +175,14 @@ class HubCheckpointCallback(TrainerCallback):
                     )
                     print(f"Saved and uploaded checkpoint-{step} to Hugging Face Hub.")
 
-            threading.Thread(target=_async_upload, daemon=True).start()
+            t = threading.Thread(target=_async_upload)
+            t.start()
+            self.threads.append(t)
+
+    def flush(self, timeout=300):
+        for t in self.threads:
+            if t.is_alive():
+                t.join(timeout=timeout)
 
 def main():
     args = get_args()
@@ -382,11 +390,16 @@ def main():
         if args.upload_model_repo_id.strip() and hf_token:
             print(f"Uploading GGUF ({args.quant_method}) to {args.upload_model_repo_id.strip()}...")
             student_model.push_to_hub_gguf(
-                args.upload_model_repo_id.strip(),
-                tokenizer,
-                quantization_method=args.quant_method,
-                token=hf_token.strip(),
-            )
+                 args.upload_model_repo_id.strip(),
+                 tokenizer,
+                 quantization_method=args.quant_method,
+                 token=hf_token.strip(),
+             )
+
+    # Ensure all background checkpoint uploads complete
+    for cb in callbacks:
+        if isinstance(cb, HubCheckpointCallback):
+            cb.flush()
 
 if __name__ == "__main__":
     main()
