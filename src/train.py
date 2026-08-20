@@ -7,13 +7,15 @@ Knowledge Distillation & Fine-Tuning Driver using Unsloth & rsLoRA:
 2. Teacher: Torpedo Luau-Qwen3-4B (Williams 2025) frozen in full 16-bit.
 3. Distillation: Softmax temperature scaling (T=2.0) and dual-objective loss (alpha=0.5) (Hinton et al. 2015, Sanh et al. 2019).
 4. Adapter: Rank-Stabilized LoRA (rsLoRA, Kalajdzievski 2023, arXiv:2312.03732) with r=64, alpha=64.
-5. Export: Full 16-bit merged master model & Q4_K_M GGUF binary for llama-server.
+5. Export: Full 16-bit merged master model & Q4_0 GGUF binary for llama-server.
 """
 
 import os
 import sys
 import argparse
 import warnings
+import threading
+import glob
 import shutil
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
@@ -21,6 +23,7 @@ os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
@@ -276,7 +279,6 @@ def main():
 
     # Restore checkpoints from Hugging Face Hub
     if resume_cp and args.upload_model_repo_id.strip() and hf_token:
-        import glob
         print(f"Fetching remote checkpoints from {args.upload_model_repo_id.strip()}...")
         try:
             from huggingface_hub import snapshot_download
