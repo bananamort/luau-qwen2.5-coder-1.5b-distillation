@@ -109,19 +109,18 @@ def process_single_code(args_tuple) -> List[Dict[str, List[int]]]:
     minified = minify_code(code, tmp_dir, task_id)
     tokens = encode_text(tok, minified)
     
-    # Stress test constraint: only use files with enough tokens to fully saturate max_seq_len
-    max_content_len = max_seq_len - 64
-    if len(tokens) < max_content_len:
+    # Stress test constraint: only accept large files with enough real code to fill 2048 tokens without padding
+    if len(tokens) < max_seq_len + 128:
         return []
 
     file_samples = []
 
     for _ in range(cuts_per_file):
-        start_offset = random.randint(0, len(tokens) - max_content_len)
-        window_tokens = tokens[start_offset : start_offset + max_content_len]
+        start_offset = random.randint(0, len(tokens) - (max_seq_len + 64))
+        window_tokens = tokens[start_offset : start_offset + max_seq_len + 64]
 
         # OpenAI FIM uniform 2-cut partition (Section 3 & Appendix C)
-        cut1, cut2 = sorted(random.sample(range(1, len(window_tokens)), 2))
+        cut1, cut2 = sorted(random.sample(range(32, len(window_tokens) - 32), 2))
         prefix_tokens = window_tokens[:cut1]
         middle_tokens = window_tokens[cut1:cut2]
         suffix_tokens = window_tokens[cut2:]
@@ -139,16 +138,11 @@ def process_single_code(args_tuple) -> List[Dict[str, List[int]]]:
         prompt_ids = encode_text(tok, prompt)
         middle_ids = encode_text(tok, f"{middle}<|im_end|>")
 
+        if len(prompt_ids) + len(middle_ids) < max_seq_len:
+            continue
+
         input_ids = (prompt_ids + middle_ids)[:max_seq_len]
         labels = ([-100] * len(prompt_ids) + middle_ids)[:max_seq_len]
-        
-        # Pad to exactly max_seq_len if off by a few tokens from ChatML delimiters
-        pad_id = 151654
-        if len(input_ids) < max_seq_len:
-            pad_len = max_seq_len - len(input_ids)
-            input_ids = input_ids + [pad_id] * pad_len
-            labels = labels + [-100] * pad_len
-
         attention_mask = [1] * len(input_ids)
 
         file_samples.append({
