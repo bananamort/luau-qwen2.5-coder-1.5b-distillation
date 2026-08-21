@@ -33,7 +33,6 @@ import torch
 import torch.nn.functional as F
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from transformers import AutoTokenizer, TrainingArguments, TrainerCallback, DataCollatorForSeq2Seq
-from transformers.utils import is_flash_attn_2_available
 from trl import SFTTrainer
 from datasets import load_dataset, Dataset
 from huggingface_hub import login, HfApi, hf_hub_download
@@ -135,6 +134,10 @@ class DistillationTrainer(SFTTrainer):
 
             kl_loss = (kl_sum / num_tokens) * (self.temperature ** 2)
             total_loss = (1.0 - self.alpha) * ce_loss + self.alpha * kl_loss
+
+            # Normalize micro-batch contribution when Trainer uses token-level accumulation
+            if num_items_in_batch is not None:
+                total_loss = total_loss * (num_tokens / num_items_in_batch)
         else:
             total_loss = student_logits.sum() * 0.0
             return (total_loss, student_outputs) if return_outputs else total_loss
@@ -235,8 +238,6 @@ def main():
     print(f"Porting tokenizer & chat template from Teacher ({args.teacher_model})...")
     tokenizer = AutoTokenizer.from_pretrained(args.teacher_model)
 
-    attn = "flash_attention_2"  # hard fail if wheel missing
-
     # Student: Qwen2.5-Coder-1.5B (Hui et al. 2024, arXiv:2409.12186)
     print(f"Loading 1.5B Student ({args.model_name}) with rsLoRA (use_rslora={args.use_rslora})...")
     student_model, _ = FastLanguageModel.from_pretrained(
@@ -244,7 +245,6 @@ def main():
         max_seq_length = args.max_seq_length,
         dtype = None, # Unsloth autodetects native BF16 / FP16
         load_in_4bit = False, # Full 16-bit precision base weights
-        attn_implementation = attn,
     )
 
     # Rank-Stabilized LoRA: delta_W = (alpha / sqrt(r)) * B * A (Kalajdzievski 2023, arXiv:2312.03732)
@@ -272,7 +272,6 @@ def main():
         max_seq_length = args.max_seq_length,
         dtype = None,
         load_in_4bit = False,
-        attn_implementation = attn,
     )
     FastLanguageModel.for_inference(teacher_model)
     teacher_model.eval()
@@ -322,6 +321,7 @@ def main():
         learning_rate = args.learning_rate,
         fp16 = not is_bfloat16_supported(),
         bf16 = is_bfloat16_supported(),
+        max_grad_norm = 1.0,
         tf32 = True,
         dataloader_num_workers = 2,
         dataloader_prefetch_factor = 2,
