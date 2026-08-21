@@ -62,8 +62,8 @@ def get_args():
     parser.add_argument("--chunk_size", type=int, default=2048, help="Chunk size for KL loss")
     
     # Training Parameters
-    parser.add_argument("--batch_size", type=int, default=2, help="Per-device micro-batch size")
-    parser.add_argument("--grad_accum", type=int, default=8, help="Gradient accumulation steps")
+    parser.add_argument("--batch_size", type=int, default=4, help="Per-device micro-batch size")
+    parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs")
     parser.add_argument("--max_steps", type=int, default=-1, help="Max steps (overrides epochs if > 0)")
@@ -255,7 +255,7 @@ def main():
         "use_rslora": args.use_rslora,
         "lora_dropout": 0,
         "bias": "none",
-        "use_gradient_checkpointing": "unsloth",
+        "use_gradient_checkpointing": True,
         "random_state": 3407,
     }
     if args.qat_scheme:
@@ -363,6 +363,11 @@ def main():
     print("Starting training...")
     trainer_stats = trainer.train(resume_from_checkpoint=resume_cp)
     print("Training complete.")
+
+    if torch.cuda.is_available():
+        peak_alloc = torch.cuda.max_memory_allocated() / (1024 ** 3)
+        peak_reserved = torch.cuda.max_memory_reserved() / (1024 ** 3)
+        print(f"Peak GPU VRAM allocated: {peak_alloc:.2f} GB | reserved: {peak_reserved:.2f} GB")
 
     # 5. Save & Export
     # Save standalone LoRA adapter weights
