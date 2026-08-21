@@ -1,11 +1,10 @@
 import argparse
 import os
-import sys
 import numpy as np
 import torch
 from datasets import Dataset
 from huggingface_hub import hf_hub_download
-from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Analytical Teacher Probability Mass Truncation Probe")
@@ -48,13 +47,10 @@ def main():
 
     # 3. Load Frozen 4B Teacher
     print(f"\nLoading Teacher Model ({args.teacher_model}) in BF16...")
-    teacher, _ = FastLanguageModel.from_pretrained(
-        model_name=args.teacher_model,
-        max_seq_length=2048,
+    teacher = AutoModelForCausalLM.from_pretrained(
+        args.teacher_model,
         dtype=torch.bfloat16,
-        load_in_4bit=False,
-    )
-    FastLanguageModel.for_inference(teacher)
+    ).to("cuda")
     teacher.eval()
 
     k_ranks = [16, 32, 64, 128, 256, 512]
@@ -76,10 +72,14 @@ def main():
             outputs = teacher(input_ids=input_ids)
             active_logits = outputs.logits[:, :-1][mask] # [N_active, 151936]
 
-            # Softmax at temperature T
-            probs = torch.softmax(active_logits / args.temperature, dim=-1)
-            sorted_probs, _ = torch.sort(probs, dim=-1, descending=True)
-            cumsum = sorted_probs.cumsum(dim=-1) # [N_active, 151936]
+            # Softmax at temperature T (fp32 upcast: tail percentages are the measurand,
+            # and bf16 epsilon is the same order as the leak values being reported)
+            probs = torch.softmax(active_logits.float() / args.temperature, dim=-1)
+
+            # Softmax sums to 1, so leaked mass beyond rank k = 1 - sum(top-k).
+            # One topk(max(k_ranks)) replaces a full O(V*logV) sort of the vocab.
+            topk_vals = torch.topk(probs, max(k_ranks), dim=-1).values # [N_active, 512]
+            cumsum = topk_vals.cumsum(dim=-1) # [N_active, 512]
 
             num_active = active_logits.size(0)
             total_tokens_probed += num_active
@@ -115,6 +115,12 @@ def main():
     print("\nDecision Summary:")
     print(f"• Top-64  preserves {100.0 - arr_64.mean()*100:.2f}% of teacher probability mass on average (p99 leaks {np.percentile(arr_64, 99)*100:.2f}%).")
     print(f"• Top-128 preserves {100.0 - arr_128.mean()*100:.2f}% of teacher probability mass on average (p99 leaks {np.percentile(arr_128, 99)*100:.2f}%).")
+    for k in k_ranks:
+        if np.percentile(np.array(all_leaked_mass[k]), 99) * 100 < 0.1:
+            print(f"• Recommended: K = {k} (smallest probed rank with p99 leak < 0.1%).")
+            break
+    else:
+        print("• No probed K achieves p99 leak < 0.1%; prefer the largest probed K.")
     print("=" * 85)
 
 if __name__ == "__main__":
