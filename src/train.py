@@ -233,6 +233,16 @@ def main():
         dataset = load_dataset(dataset_path, split="train")
     print(f"Dataset loaded: {len(dataset):,} samples.")
 
+    # Profile sequence length distribution (unbiased random sample)
+    if "input_ids" in dataset.column_names and len(dataset) > 0:
+        import numpy as np
+        n = min(1000, len(dataset))
+        rng = np.random.RandomState(3407)
+        idx = sorted(rng.choice(len(dataset), size=n, replace=False))
+        lens = np.array([len(x) for x in dataset.select(idx)["input_ids"]])
+        p50, p90, p95, p99 = np.percentile(lens, [50, 90, 95, 99])
+        print(f"Length profile (n={n}): mean={lens.mean():.0f} p50={p50:.0f} p90={p90:.0f} p95={p95:.0f} p99={p99:.0f} max={lens.max()}")
+
     # 3. Load Models
     # Port tokenizer & chat template directly from Teacher (TorpedoSoftware/Luau-Qwen3-4B-FIM-v0.1)
     print(f"Porting tokenizer & chat template from Teacher ({args.teacher_model})...")
