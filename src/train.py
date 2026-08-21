@@ -393,13 +393,16 @@ def main():
         print(f"Saved GGUF model to {gguf_dir}")
 
         if args.upload_model_repo_id.strip() and hf_token:
-            print(f"Uploading GGUF ({args.quant_method}) to {args.upload_model_repo_id.strip()}...")
-            student_model.push_to_hub_gguf(
-                 args.upload_model_repo_id.strip(),
-                 tokenizer,
-                 quantization_method=args.quant_method,
-                 token=hf_token.strip(),
-             )
+            target_repo = args.upload_model_repo_id.strip()
+            print(f"Uploading GGUF ({args.quant_method}) to {target_repo}...")
+            export_folder = f"{gguf_dir}_gguf" if os.path.exists(f"{gguf_dir}_gguf") else gguf_dir
+            api = HfApi(token=hf_token.strip())
+            api.upload_folder(
+                folder_path = export_folder,
+                repo_id = target_repo,
+                repo_type = "model",
+            )
+            print(f"Uploaded GGUF artifacts to {target_repo}")
 
     # Ensure all background checkpoint uploads complete
     for cb in callbacks:
